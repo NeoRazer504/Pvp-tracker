@@ -1,0 +1,234 @@
+{
+  "players": [
+    {
+      "user_id": 1109599391242784820,
+      "category": "sword",
+      "kills": 0,
+      "deaths": 0,
+      "wins": 0,
+      "losses": 1,
+      "winstreak": 0,
+      "elo": 985
+    },
+    {
+      "user_id": 957688706133803098,
+      "category": "sword",
+      "kills": 0,
+      "deaths": 0,
+      "wins": 0,
+      "losses": 0,
+      "winstreak": 0,
+      "elo": 1000
+    },
+    {
+      "user_id": 960257495534805065,
+      "category": "mace",
+      "kills": 0,
+      "deaths": 0,
+      "wins": 0,
+      "losses": 0,
+      "winstreak": 1,
+      "elo": 1015
+    },
+    {
+      "user_id": 957688706133803098,
+      "category": "mace",
+      "kills": 0,
+      "deaths": 1,
+      "wins": 0,
+      "losses": 1,
+      "winstreak": 0,
+      "elo": 985
+    },
+    {
+      "user_id": 960257495534805065,
+      "category": "sword",
+      "kills": 0,
+      "deaths": 0,
+      "wins": 0,
+      "losses": 0,
+      "winstreak": 0,
+      "elo": 1000
+    },
+    {
+      "user_id": 1264767547723612210,
+      "category": "sword",
+      "kills": 1,
+      "deaths": 1,
+      "wins": 1,
+      "losses": 1,
+      "winstreak": 0,
+      "elo": 1000
+    },
+    {
+      "user_id": 704008700175712314,
+      "category": "sword",
+      "kills": -11,
+      "deaths": 0,
+      "wins": 3,
+      "losses": 0,
+      "winstreak": 3,
+      "elo": 1045
+    },
+    {
+      "user_id": 704008700175712314,
+      "category": "axe",
+      "kills": 1,
+      "deaths": 0,
+      "wins": 1,
+      "losses": 0,
+      "winstreak": 1,
+      "elo": 1010
+    },
+    {
+      "user_id": 704008700175712314,
+      "category": "mace",
+      "kills": 0,
+      "deaths": 0,
+      "wins": 0,
+      "losses": 0,
+      "winstreak": 0,
+      "elo": 1000
+    },
+    {
+      "user_id": 704008700175712314,
+      "category": "crystal",
+      "kills": 0,
+      "deaths": 0,
+      "wins": 0,
+      "losses": 0,
+      "winstreak": 0,
+      "elo": 1000
+    },
+    {
+      "user_id": 704008700175712314,
+      "category": "uhc",
+      "kills": 0,
+      "deaths": 0,
+      "wins": 0,
+      "losses": 0,
+      "winstreak": 0,
+      "elo": 1000
+    },
+    {
+      "user_id": 1264767547723612210,
+      "category": "axe",
+      "kills": 0,
+      "deaths": 1,
+      "wins": 0,
+      "losses": 1,
+      "winstreak": 0,
+      "elo": 990
+    },
+    {
+      "user_id": 1264767547723612210,
+      "category": "mace",
+      "kills": 0,
+      "deaths": 0,
+      "wins": 0,
+      "losses": 0,
+      "winstreak": 0,
+      "elo": 1000
+    },
+    {
+      "user_id": 1264767547723612210,
+      "category": "crystal",
+      "kills": 0,
+      "deaths": 0,
+      "wins": 0,
+      "losses": 0,
+      "winstreak": 0,
+      "elo": 1000
+    },
+    {
+      "user_id": 1264767547723612210,
+      "category": "uhc",
+      "kills": 0,
+      "deaths": 0,
+      "wins": 0,
+      "losses": 0,
+      "winstreak": 0,
+      "elo": 1000
+    },
+    {
+      "user_id": 960257495534805065,
+      "category": "axe",
+      "kills": 0,
+      "deaths": 0,
+      "wins": 0,
+      "losses": 0,
+      "winstreak": 0,
+      "elo": 1000
+    },
+    {
+      "user_id": 763881867631525909,
+      "category": "sword",
+      "kills": 0,
+      "deaths": 0,
+      "wins": 0,
+      "losses": 0,
+      "winstreak": 0,
+      "elo": 1000
+    },
+    {
+      "user_id": 763881867631525909,
+      "category": "axe",
+      "kills": 0,
+      "deaths": 0,
+      "wins": 0,
+      "losses": 0,
+      "winstreak": 0,
+      "elo": 1000
+    },
+    {
+      "user_id": 763881867631525909,
+      "category": "mace",
+      "kills": 0,
+      "deaths": 0,
+      "wins": 0,
+      "losses": 0,
+      "winstreak": 0,
+      "elo": 1000
+    },
+    {
+      "user_id": 763881867631525909,
+      "category": "crystal",
+      "kills": 0,
+      "deaths": 0,
+      "wins": 0,
+      "losses": 0,
+      "winstreak": 0,
+      "elo": 1000
+    },
+    {
+      "user_id": 763881867631525909,
+      "category": "uhc",
+      "kills": 0,
+      "deaths": 0,
+      "wins": 0,
+      "losses": 0,
+      "winstreak": 0,
+      "elo": 1000
+    },
+    {
+      "user_id": 1231006639633731675,
+      "category": "sword",
+      "kills": 0,
+      "deaths": -1,
+      "wins": 0,
+      "losses": 1,
+      "winstreak": 0,
+      "elo": 985
+    },
+    {
+      "user_id": 1143306624396689539,
+      "category": "sword",
+      "kills": 0,
+      "deaths": 0,
+      "wins": 0,
+      "losses": 0,
+      "winstreak": 0,
+      "elo": 1000
+    }
+  ]
+}
