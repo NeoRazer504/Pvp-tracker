@@ -87,6 +87,7 @@ conn = sqlite3.connect("pvp_stats.db", check_same_thread=False)
 conn.isolation_level = None  # Autocommit mode
 c = conn.cursor()
 
+# --- PLAYERS TABLE ---
 c.execute("""
 CREATE TABLE IF NOT EXISTS players (
     user_id INTEGER,
@@ -102,6 +103,7 @@ CREATE TABLE IF NOT EXISTS players (
 """)
 conn.commit()
 
+# --- BANS TABLE ---
 c.execute("""
 CREATE TABLE IF NOT EXISTS bans (
     user_id INTEGER PRIMARY KEY,
@@ -111,7 +113,20 @@ CREATE TABLE IF NOT EXISTS bans (
 """)
 conn.commit()
 
-# Load players from players.json (if present) into the database
+# --- HISTORY TABLE ---
+c.execute("""
+CREATE TABLE IF NOT EXISTS history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    category TEXT,
+    action TEXT,
+    details TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+)
+""")
+conn.commit()
+
+# --- LOAD PLAYERS FROM JSON ---
 if os.path.exists("players.json"):
     try:
         with open("players.json", "r", encoding="utf-8") as f:
@@ -127,6 +142,7 @@ if os.path.exists("players.json"):
                 losses = int(p.get("losses", 0))
                 winstreak = int(p.get("winstreak", 0))
                 elo = int(p.get("elo", 1000))
+
                 c.execute(
                     "INSERT OR REPLACE INTO players (user_id, category, kills, deaths, wins, losses, winstreak, elo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (uid, cat, kills, deaths, wins, losses, winstreak, elo),
@@ -139,7 +155,7 @@ if os.path.exists("players.json"):
     except Exception as e:
         print(f"⚠️ Failed to load players.json: {e}")
 
-# Load bans from bans.json (if present) into the database
+# --- LOAD BANS FROM JSON ---
 if os.path.exists("bans.json"):
     try:
         with open("bans.json", "r", encoding="utf-8") as f:
@@ -150,6 +166,7 @@ if os.path.exists("bans.json"):
                 uid = int(b.get("user_id"))
                 reason = b.get("reason", "No reason provided")
                 banned_at = b.get("banned_at", "")
+
                 c.execute(
                     "INSERT OR REPLACE INTO bans (user_id, reason, banned_at) VALUES (?, ?, ?)",
                     (uid, reason, banned_at),
@@ -161,9 +178,16 @@ if os.path.exists("bans.json"):
         print(f"✅ Loaded {loaded_bans} ban records from bans.json")
     except Exception as e:
         print(f"⚠️ Failed to load bans.json: {e}")
-
+        
 CATEGORIES = ["sword", "axe", "mace", "crystal", "uhc"]
 
+async def category_autocomplete(interaction: discord.Interaction, current: str):
+    current = current.lower()
+    return [
+        app_commands.Choice(name=cat.upper(), value=cat)
+        for cat in CATEGORIES
+        if current in cat.lower()
+    ][:25]
 
 class CategoryPager(discord.ui.View):
     def __init__(self, kind: str, target_user: discord.User | None = None, start: int = 0):
@@ -282,15 +306,22 @@ class DuelResultView(discord.ui.View):
         winner_gain, loser_loss = calculate_elo_change(winner_elo, loser_elo, self.kills)
         
         c.execute(
-            "UPDATE players SET kills = MAX(0, kills + ?), wins = wins + 1, winstreak = winstreak + 1, elo = elo + ? WHERE user_id = ? AND category = ?",
+            "UPDATE players SET kills = MAX(0, kills + ?), wins = wins + 1, winstreak = winstreak + 1, elo = MAX(0, elo + ?) WHERE user_id = ? AND category = ?",
             (self.kills, winner_gain, winner.id, self.category)
         )
         c.execute(
-            "UPDATE players SET deaths = MAX(0, deaths + ?), losses = losses + 1, winstreak = 0, elo = elo + ? WHERE user_id = ? AND category = ?",
+            "UPDATE players SET deaths = MAX(0, deaths + ?), losses = losses + 1, winstreak = 0, elo = MAX(0, elo + ?) WHERE user_id = ? AND category = ?",
             (self.kills, loser_loss, loser.id, self.category)
         )
         conn.commit()
         
+        log_history(
+            winner.id,
+            self.category,
+            "duel_win",
+            f"{winner.display_name} defeated {loser.display_name} (kills: {self.kills}, ΔELO: +{winner_gain}/{loser_loss})"
+        )
+
         await interaction.response.send_message(f"⚔️ Duel finished! {winner.mention} defeated {loser.mention} in **{self.category}**! (+{winner_gain} / {loser_loss} ELO)")
         self.stop()
 
@@ -309,40 +340,66 @@ class DuelResultView(discord.ui.View):
         winner_gain, loser_loss = calculate_elo_change(winner_elo, loser_elo, self.kills)
         
         c.execute(
-            "UPDATE players SET kills = MAX(0, kills + ?), wins = wins + 1, winstreak = winstreak + 1, elo = elo + ? WHERE user_id = ? AND category = ?",
+            "UPDATE players SET kills = MAX(0, kills + ?), wins = wins + 1, winstreak = winstreak + 1, elo = MAX(0, elo + ?) WHERE user_id = ? AND category = ?",
             (self.kills, winner_gain, winner.id, self.category)
         )
         c.execute(
-            "UPDATE players SET deaths = MAX(0, deaths + ?), losses = losses + 1, winstreak = 0, elo = elo + ? WHERE user_id = ? AND category = ?",
+            "UPDATE players SET deaths = MAX(0, deaths + ?), losses = losses + 1, winstreak = 0, elo = MAX(0, elo + ?) WHERE user_id = ? AND category = ?",
             (self.kills, loser_loss, loser.id, self.category)
         )
         conn.commit()
         
+        log_history(
+            winner.id,
+            self.category,
+            "duel_win",
+            f"{winner.display_name} defeated {loser.display_name} (kills: {self.kills}, ΔELO: +{winner_gain}/{loser_loss})"
+        )
+
         await interaction.response.send_message(f"⚔️ Duel finished! {winner.mention} defeated {loser.mention} in **{self.category}**! (+{winner_gain} / {loser_loss} ELO)")
         self.stop()
 
-def calculate_elo_change(winner_elo, loser_elo, kill_difference=1):
-    """ELO system: (elo_diff / 2) * kill_difference with upset bonuses, minimum ±10."""
-    elo_diff = abs(winner_elo - loser_elo)
-    base_change = (elo_diff // 2) * kill_difference
-    
-    # Ensure minimum base change of 10
-    if base_change < 10:
-        base_change = 10
-    
-    if winner_elo < loser_elo:  # Upset: lower-rated player won
-        # Upset bonus scales with rating gap (up to +30)
-        bonus = min(elo_diff // 30, 30)
-        return base_change + bonus, -(base_change + bonus)
-    else:  # Expected: higher-rated player won
-        # Loss scales with how much higher they were rated (up to -5 penalty)
-        penalty = min(elo_diff // 100, 5)
-        return base_change - penalty, -(base_change - penalty)
+def calculate_elo_change(winner_elo: int, loser_elo: int, kill_difference: int = 1) -> tuple[int, int]:
+    """
+    New ELO system:
+    - Base K = 24
+    - Scales with kill difference (margin of victory)
+    - Considers rating difference via expected score
+    - Winner always gains ELO
+    - Loser always loses ELO
+    - ELO cannot go below 0 (handled later in SQL)
+    """
+    if kill_difference < 1:
+        kill_difference = 1
+
+    # Expected score for winner
+    expected_winner = 1 / (1 + 10 ** ((loser_elo - winner_elo) / 400))
+
+    # Margin multiplier (up to ~2x for big wins)
+    margin_multiplier = 1 + min(kill_difference, 5) * 0.15
+
+    base_k = 24
+    raw_change = base_k * margin_multiplier * (1 - expected_winner)
+
+    winner_gain = int(round(raw_change))
+    if winner_gain < 5:
+        winner_gain = 5  # minimum gain
+
+    loser_loss = -winner_gain
+    return winner_gain, loser_loss
 
 def is_banned(user_id: int) -> bool:
     """Check if a user is banned."""
     c.execute("SELECT 1 FROM bans WHERE user_id = ?", (user_id,))
     return c.fetchone() is not None
+
+# --- HISTORY LOGGER ---
+def log_history(user_id: int | None, category: str | None, action: str, details: str):
+    c.execute(
+        "INSERT INTO history (user_id, category, action, details) VALUES (?, ?, ?, ?)",
+        (user_id, category, action, details),
+    )
+    conn.commit()
 
 # ---------------- SLASH COMMANDS ----------------
 
@@ -451,6 +508,8 @@ async def edit(interaction: discord.Interaction, user: discord.User, category: s
         updates.append("losses = ?")
         params.append(losses)
     if elo is not None:
+        if elo < 0:
+            elo = 0
         updates.append("elo = ?")
         params.append(elo)
     if winstreak is not None:
@@ -466,6 +525,14 @@ async def edit(interaction: discord.Interaction, user: discord.User, category: s
     query = "UPDATE players SET " + ", ".join(updates) + " WHERE user_id = ? AND category = ?"
     c.execute(query, params)
     conn.commit()
+
+    log_history(
+        user.id,
+        category,
+        "admin_edit",
+        f"Admin {interaction.user.display_name} edited stats for {user.display_name}"
+    )
+    
     await interaction.response.send_message(f"✏️ Updated {user.mention}'s **{category}** stats!")
 
 @bot.tree.command(name="report", description="Report a PvP match result")
@@ -500,14 +567,21 @@ async def report(interaction: discord.Interaction, winner: discord.User, loser: 
     winner_gain, loser_loss = calculate_elo_change(winner_elo, loser_elo, kills)
     
     c.execute(
-        "UPDATE players SET kills = MAX(0, kills + ?), wins = wins + 1, winstreak = winstreak + 1, elo = elo + ? WHERE user_id = ? AND category = ?",
-        (kills, winner_gain, winner.id, category)
+    "UPDATE players SET kills = MAX(0, kills + ?), wins = wins + 1, winstreak = winstreak + 1, elo = MAX(0, elo + ?) WHERE user_id = ? AND category = ?",
+    (kills, winner_gain, winner.id, category)
     )
     c.execute(
-        "UPDATE players SET deaths = MAX(0, deaths + ?), losses = losses + 1, winstreak = 0, elo = elo + ? WHERE user_id = ? AND category = ?",
+        "UPDATE players SET deaths = MAX(0, deaths + ?), losses = losses + 1, winstreak = 0, elo = MAX(0, elo + ?) WHERE user_id = ? AND category = ?",
         (kills, loser_loss, loser.id, category)
     )
     conn.commit()
+
+    log_history(
+        winner.id,
+        category,
+        "match_report",
+        f"{winner.display_name} defeated {loser.display_name} (kills: {kills}, ΔELO: +{winner_gain}/{loser_loss})"
+    )
 
     await interaction.response.send_message(f"⚔️ {winner.mention} defeated {loser.mention} in **{category}**! (+{winner_gain} / {loser_loss} ELO)")
 
@@ -545,17 +619,74 @@ async def duel(interaction: discord.Interaction, opponent: discord.User, categor
     await opponent.send(embed=embed, view=view)
 
 @bot.tree.command(name="stats", description="View player stats")
-async def stats(interaction: discord.Interaction, user: discord.User = None, category: str = "sword"):
-    if category not in CATEGORIES:
-        await interaction.response.send_message(f"❌ Invalid category! Choose from: {', '.join(CATEGORIES)}", ephemeral=True)
-        return
-    
+async def stats(
+    interaction: discord.Interaction,
+    user: discord.User | None = None,
+    category: str | None = None,
+):
     target_user = user or interaction.user
+
+    # -------------------------
+    # OVERALL STATS
+    # -------------------------
+    if category is None:
+        c.execute("""
+            SELECT
+                SUM(kills),
+                SUM(deaths),
+                SUM(wins),
+                SUM(losses),
+                MAX(winstreak),
+                AVG(elo)
+            FROM players
+            WHERE user_id = ?
+        """, (target_user.id,))
+        row = c.fetchone()
+
+        if not row or row[0] is None:
+            await interaction.response.send_message(
+                f"❌ {target_user.mention} has no stats yet!",
+                ephemeral=True,
+            )
+            return
+
+        kills, deaths, wins, losses, streak, avg_elo = row
+        kd = round(kills / deaths, 2) if deaths and deaths > 0 else kills
+        elo_display = int(round(avg_elo)) if avg_elo is not None else 0
+
+        embed = discord.Embed(
+            title=f"📊 Overall Stats for {target_user.display_name}",
+            color=0x00ff00,
+        )
+        embed.add_field(name="Kills", value=kills)
+        embed.add_field(name="Deaths", value=deaths)
+        embed.add_field(name="K/D", value=kd)
+        embed.add_field(name="Wins", value=wins)
+        embed.add_field(name="Losses", value=losses)
+        embed.add_field(name="Best Win Streak", value=streak)
+        embed.add_field(name="Average Elo", value=elo_display)
+
+        await interaction.response.send_message(embed=embed)
+        return
+
+    # -------------------------
+    # CATEGORY STATS
+    # -------------------------
+    if category not in CATEGORIES:
+        await interaction.response.send_message(
+            f"❌ Invalid category! Choose from: {', '.join(CATEGORIES)}",
+            ephemeral=True,
+        )
+        return
+
     player = get_player(target_user.id, category)
     kills, deaths, wins, losses, streak, elo = player[2:]
     kd = round(kills / deaths, 2) if deaths > 0 else kills
 
-    embed = discord.Embed(title=f"📊 {category.upper()} Stats for {target_user.display_name}", color=0x00ff00)
+    embed = discord.Embed(
+        title=f"📊 {category.upper()} Stats for {target_user.display_name}",
+        color=0x00ff00,
+    )
     embed.add_field(name="Kills", value=kills)
     embed.add_field(name="Deaths", value=deaths)
     embed.add_field(name="K/D", value=kd)
@@ -564,61 +695,79 @@ async def stats(interaction: discord.Interaction, user: discord.User = None, cat
     embed.add_field(name="Win Streak", value=streak)
     embed.add_field(name="Elo", value=elo)
 
-    idx = CATEGORIES.index(category) if category in CATEGORIES else 0
+    idx = CATEGORIES.index(category)
     view = CategoryPager("stats", target_user=target_user, start=idx)
+
     await interaction.response.send_message(embed=embed, view=view)
 
-@bot.tree.command(name="leaderboard", description="Top 10 PvP players")
-async def leaderboard(interaction: discord.Interaction, category: str = "sword"):
-    if category not in CATEGORIES:
-        await interaction.response.send_message(f"❌ Invalid category! Choose from: {', '.join(CATEGORIES)}", ephemeral=True)
+@bot.tree.command(name="leaderboard", description="Top PvP players")
+async def leaderboard(interaction: discord.Interaction, category: str | None = None):
+    # -------------------------
+    # OVERALL LEADERBOARD
+    # -------------------------
+    if category is None:
+        c.execute("""
+            SELECT user_id, AVG(elo) AS avg_elo
+            FROM players
+            GROUP BY user_id
+            ORDER BY avg_elo DESC
+            LIMIT 10
+        """)
+        top = c.fetchall()
+
+        embed = discord.Embed(title="🏆 Overall Leaderboard", color=0xffd700)
+
+        for i, (user_id, avg_elo) in enumerate(top, start=1):
+            try:
+                user = await bot.fetch_user(user_id)
+                display = user.display_name if user else f"Unknown ({user_id})"
+            except:
+                display = f"Unknown ({user_id})"
+
+            embed.add_field(
+                name=f"#{i} {display}",
+                value=f"Average Elo: {int(round(avg_elo))}",
+                inline=False
+            )
+
+        await interaction.response.send_message(embed=embed)
         return
-    
-    c.execute("SELECT user_id, elo FROM players WHERE category = ? ORDER BY elo DESC LIMIT 10", (category,))
+
+    # -------------------------
+    # CATEGORY LEADERBOARD
+    # -------------------------
+    if category not in CATEGORIES:
+        await interaction.response.send_message(
+            f"❌ Invalid category! Choose from: {', '.join(CATEGORIES)}",
+            ephemeral=True
+        )
+        return
+
+    c.execute(
+        "SELECT user_id, elo FROM players WHERE category = ? ORDER BY elo DESC LIMIT 10",
+        (category,)
+    )
     top = c.fetchall()
 
     embed = discord.Embed(title=f"🏆 {category.upper()} Leaderboard", color=0xffd700)
+
     for i, (user_id, elo) in enumerate(top, start=1):
         try:
             user = await bot.fetch_user(user_id)
             display = user.display_name if user else f"Unknown ({user_id})"
         except:
             display = f"Unknown ({user_id})"
-        embed.add_field(name=f"#{i} {display}", value=f"Elo: {elo}", inline=False)
 
-    idx = CATEGORIES.index(category) if category in CATEGORIES else 0
+        embed.add_field(
+            name=f"#{i} {display}",
+            value=f"Elo: {elo}",
+            inline=False
+        )
+
+    idx = CATEGORIES.index(category)
     view = CategoryPager("leaderboard", start=idx)
+
     await interaction.response.send_message(embed=embed, view=view)
-
-@bot.tree.command(name="sword", description="Top 10 Sword players")
-async def sword_lb(interaction: discord.Interaction):
-    c.execute("SELECT user_id, elo FROM players WHERE category = ? ORDER BY elo DESC LIMIT 10", ("sword",))
-    top = c.fetchall()
-
-    embed = discord.Embed(title="🏆 Sword Leaderboard", color=0xffd700)
-    for i, (user_id, elo) in enumerate(top, start=1):
-        try:
-            user = await bot.fetch_user(user_id)
-            display = user.display_name if user else f"Unknown ({user_id})"
-        except:
-            display = f"Unknown ({user_id})"
-        embed.add_field(name=f"#{i} {display}", value=f"Elo: {elo}", inline=False)
-    await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="axe", description="Top 10 Axe players")
-async def axe_lb(interaction: discord.Interaction):
-    c.execute("SELECT user_id, elo FROM players WHERE category = ? ORDER BY elo DESC LIMIT 10", ("axe",))
-    top = c.fetchall()
-
-    embed = discord.Embed(title="🏆 Axe Leaderboard", color=0xffd700)
-    for i, (user_id, elo) in enumerate(top, start=1):
-        try:
-            user = await bot.fetch_user(user_id)
-            display = user.display_name if user else f"Unknown ({user_id})"
-        except:
-            display = f"Unknown ({user_id})"
-        embed.add_field(name=f"#{i} {display}", value=f"Elo: {elo}", inline=False)
-    await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="mace", description="Top 10 Mace players")
 async def mace_lb(interaction: discord.Interaction):
@@ -705,6 +854,72 @@ async def reset(interaction: discord.Interaction, user: discord.User, category: 
         (user.id, category)
     )
     conn.commit()
+
+    log_history(
+        user.id,
+        category,
+        "reset",
+        f"Admin {interaction.user.display_name} reset stats for {user.display_name}"
+    )
+
     await interaction.response.send_message(f"🔄 Reset {user.mention}'s **{category}** stats to default!")
+
+@bot.tree.command(name="history", description="Show recent PvP history (reports, edits, duels, etc.)")
+async def history(
+    interaction: discord.Interaction,
+    user: discord.User | None = None,
+    category: str | None = None
+):
+    params = []
+    query = "SELECT user_id, category, action, details, created_at FROM history WHERE 1=1"
+
+    # Filter by user
+    if user is not None:
+        query += " AND user_id = ?"
+        params.append(user.id)
+
+    # Filter by category
+    if category is not None:
+        query += " AND category = ?"
+        params.append(category)
+
+    # Sort newest → oldest
+    query += " ORDER BY created_at DESC LIMIT 20"
+
+    c.execute(query, params)
+    rows = c.fetchall()
+
+    if not rows:
+        await interaction.response.send_message("📭 No history found for that filter.", ephemeral=True)
+        return
+
+    # Title building
+    title = "📜 Recent History"
+    if user:
+        title += f" for {user.display_name}"
+    if category:
+        title += f" in {category.upper()}"
+
+    embed = discord.Embed(title=title, color=0x7289da)
+
+    for user_id, cat, action, details, created_at in rows:
+        cat_label = cat.upper() if cat else "OVERALL"
+        embed.add_field(
+            name=f"[{created_at}] {action.upper()} — {cat_label}",
+            value=f"👤 User: <@{user_id}>\n📝 {details}",
+            inline=False
+        )
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@stats.autocomplete("category")
+@leaderboard.autocomplete("category")
+@history.autocomplete("category")
+@report.autocomplete("category")
+@duel.autocomplete("category")
+@edit.autocomplete("category")
+@reset.autocomplete("category")
+async def _category_autocomplete(interaction: discord.Interaction, current: str):
+    return await category_autocomplete(interaction, current)
 
 bot.run(TOKEN)
