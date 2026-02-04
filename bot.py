@@ -1,3 +1,4 @@
+from unicodedata import category
 import discord
 from discord import app_commands
 import sqlite3
@@ -190,14 +191,94 @@ async def category_autocomplete(interaction: discord.Interaction, current: str):
     ][:25]
 
 class CategoryPager(discord.ui.View):
-    def __init__(self, kind: str, target_user: discord.User | None = None, start: int = 0):
+    def __init__(self, kind: str, target_user: discord.User | None = None, start: int = -1):
         super().__init__(timeout=300)
         self.kind = kind  # 'leaderboard' or 'stats'
         self.target_user = target_user
-        self.index = start
+        self.index = start  # -1 = overall
 
     async def update_message(self, interaction: discord.Interaction):
+        # -------------------------
+        # OVERALL PAGE
+        # -------------------------
+        if self.index == -1:
+            if self.kind == "leaderboard":
+                c.execute("""
+                    SELECT user_id, AVG(elo) AS avg_elo
+                    FROM players
+                    GROUP BY user_id
+                    ORDER BY avg_elo DESC
+                    LIMIT 10
+                """)
+                top = c.fetchall()
+
+                embed = discord.Embed(title="🏆 Overall Leaderboard", color=0xffd700)
+
+                for i, (user_id, avg_elo) in enumerate(top, start=1):
+                    try:
+                        user = await bot.fetch_user(user_id)
+                        display = user.display_name if user else f"Unknown ({user_id})"
+                    except:
+                        display = f"Unknown ({user_id})"
+
+                    embed.add_field(
+                        name=f"#{i} {display}",
+                        value=f"Average Elo: {int(round(avg_elo))}",
+                        inline=False
+                    )
+
+                await interaction.response.edit_message(embed=embed, view=self)
+                return
+
+            else:  # overall stats
+                target = self.target_user or interaction.user
+
+                c.execute("""
+                    SELECT
+                        SUM(kills),
+                        SUM(deaths),
+                        SUM(wins),
+                        SUM(losses),
+                        MAX(winstreak),
+                        AVG(elo)
+                    FROM players
+                    WHERE user_id = ?
+                """, (target.id,))
+                row = c.fetchone()
+
+                if not row or row[0] is None:
+                    embed = discord.Embed(
+                        title=f"📊 Overall Stats for {target.display_name}",
+                        description="No stats found.",
+                        color=0x00ff00
+                    )
+                    await interaction.response.edit_message(embed=embed, view=self)
+                    return
+
+                kills, deaths, wins, losses, streak, avg_elo = row
+                kd = round(kills / deaths, 2) if deaths and deaths > 0 else kills
+                elo_display = int(round(avg_elo)) if avg_elo is not None else 0
+
+                embed = discord.Embed(
+                    title=f"📊 Overall Stats for {target.display_name}",
+                    color=0x00ff00,
+                )
+                embed.add_field(name="Kills", value=kills)
+                embed.add_field(name="Deaths", value=deaths)
+                embed.add_field(name="K/D", value=kd)
+                embed.add_field(name="Wins", value=wins)
+                embed.add_field(name="Losses", value=losses)
+                embed.add_field(name="Best Win Streak", value=streak)
+                embed.add_field(name="Average Elo", value=elo_display)
+
+                await interaction.response.edit_message(embed=embed, view=self)
+                return
+
+        # -------------------------
+        # CATEGORY PAGE
+        # -------------------------
         category = CATEGORIES[self.index]
+
         if self.kind == "leaderboard":
             c.execute("SELECT user_id, elo FROM players WHERE category = ? ORDER BY elo DESC LIMIT 10", (category,))
             top = c.fetchall()
@@ -212,6 +293,7 @@ class CategoryPager(discord.ui.View):
                 embed.add_field(name=f"#{i} {display}", value=f"Elo: {elo}", inline=False)
 
             await interaction.response.edit_message(embed=embed, view=self)
+
         else:  # stats
             target = self.target_user or interaction.user
             player = get_player(target.id, category)
@@ -228,6 +310,28 @@ class CategoryPager(discord.ui.View):
             embed.add_field(name="Elo", value=elo)
 
             await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="◀️ Prev", style=discord.ButtonStyle.secondary)
+    async def prev(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Move left: overall → last category → ... → first category → overall
+        if self.index == -1:
+            self.index = len(CATEGORIES) - 1
+        else:
+            self.index -= 1
+            if self.index < -1:
+                self.index = -1
+        await self.update_message(interaction)
+
+    @discord.ui.button(label="Next ▶️", style=discord.ButtonStyle.secondary)
+    async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Move right: overall → first category → ... → last category → overall
+        if self.index == -1:
+            self.index = 0
+        else:
+            self.index += 1
+            if self.index >= len(CATEGORIES):
+                self.index = -1
+        await self.update_message(interaction)
 
     @discord.ui.button(label="◀️ Prev", style=discord.ButtonStyle.secondary)
     async def prev(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -666,7 +770,8 @@ async def stats(
         embed.add_field(name="Best Win Streak", value=streak)
         embed.add_field(name="Average Elo", value=elo_display)
 
-        await interaction.response.send_message(embed=embed)
+        view = CategoryPager("stats", target_user=target_user, start=-1)
+        await interaction.response.send_message(embed=embed, view=view)
         return
 
     # -------------------------
@@ -730,7 +835,10 @@ async def leaderboard(interaction: discord.Interaction, category: str | None = N
                 inline=False
             )
 
-        await interaction.response.send_message(embed=embed)
+        # ⭐ NEW: Add pager arrows even for overall leaderboard
+        view = CategoryPager("leaderboard", start=-1)  # -1 means "overall"
+
+        await interaction.response.send_message(embed=embed, view=view)
         return
 
     # -------------------------
@@ -900,17 +1008,22 @@ async def history(
     if category:
         title += f" in {category.upper()}"
 
-    embed = discord.Embed(title=title, color=0x7289da)
+    embed = discord.Embed(title=title, color=0x5865F2)
 
     for user_id, cat, action, details, created_at in rows:
-        cat_label = cat.upper() if cat else "OVERALL"
+        user_tag = f"<@{user_id}>"
+        category_label = cat.upper() if cat else "OVERALL"
+
+        # Clean, simple line
+        line = f"{details} *(in {category_label})*"
+
         embed.add_field(
-            name=f"[{created_at}] {action.upper()} — {cat_label}",
-            value=f"👤 User: <@{user_id}>\n📝 {details}",
+            name="",
+            value=line,
             inline=False
         )
 
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.response.send_message(embed=embed)
 
 @stats.autocomplete("category")
 @leaderboard.autocomplete("category")
